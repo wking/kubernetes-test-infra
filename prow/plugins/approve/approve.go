@@ -85,6 +85,10 @@ type state struct {
 	author    string
 	assignees []github.User
 	htmlURL   string
+
+	// The following properties are popluated by findApprovers
+	hasApprovedLabel bool
+	notifications    []*comment
 }
 
 func init() {
@@ -316,7 +320,7 @@ func findAssociatedIssue(body string) int {
 	return v
 }
 
-// handle is the workhorse the will actually make updates to the PR.
+// findApprovers calculates approvers for a PR, but does not actually update the PR.
 // The algorithm goes as:
 // - Initially, we build an approverSet
 //   - Go through all comments in order of creation.
@@ -324,16 +328,16 @@ func findAssociatedIssue(body string) int {
 //   - If anyone said "/approve", add them to approverSet.
 //   - If anyone said "/lgtm" AND LgtmActsAsApprove is enabled, add them to approverSet.
 //   - If anyone created an approved review AND ReviewActsAsApprove is enabled, add them to approverSet.
+//   - Iff a cancel command is found, that reviewer will be removed from the approverSet
 // - Then, for each file, we see if any approver of this file is in approverSet and keep track of files without approval
 //   - An approver of a file is defined as:
 //     - Someone listed as an "approver" in an OWNERS file in the files directory OR
 //     - in one of the file's parent directories
-// - Iff all files have been approved, the bot will add the "approved" label.
-// - Iff a cancel command is found, that reviewer will be removed from the approverSet
+// - Iff all files have been approved, ...the bot will add the "approved" label.
 // 	and the munger will remove the approved label if it has been applied
-func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, opts *plugins.Approve, pr *state) error {
-	fetchErr := func(context string, err error) error {
-		return fmt.Errorf("failed to get %s for %s/%s#%d: %v", context, pr.org, pr.repo, pr.number, err)
+func findApprovers(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, opts *plugins.Approve, pr *state) (approversHandler *approvers.Approvers, err error) {
+	fetchErr := func(context string, err error) (approversHandler *approvers.Approvers, err error) {
+		return nil, fmt.Errorf("failed to get %s for %s/%s#%d: %v", context, pr.org, pr.repo, pr.number, err)
 	}
 
 	changes, err := ghc.GetPullRequestChanges(pr.org, pr.repo, pr.number)
@@ -344,14 +348,15 @@ func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, o
 	for _, change := range changes {
 		filenames = append(filenames, change.Filename)
 	}
+
 	labels, err := ghc.GetIssueLabels(pr.org, pr.repo, pr.number)
 	if err != nil {
 		return fetchErr("issue labels", err)
 	}
-	hasApprovedLabel := false
+	pr.hasApprovedLabel := false
 	for _, label := range labels {
 		if label.Name == ApprovedLabel {
-			hasApprovedLabel = true
+			pr.hasApprovedLabel = true
 			break
 		}
 	}
@@ -372,7 +377,7 @@ func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, o
 		return fetchErr("reviews", err)
 	}
 
-	approversHandler := approvers.NewApprovers(
+	approversHandler = approvers.NewApprovers(
 		approvers.NewOwners(
 			log,
 			filenames,
@@ -382,7 +387,7 @@ func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, o
 	)
 	approversHandler.AssociatedIssue = findAssociatedIssue(pr.body)
 	approversHandler.RequireIssue = opts.IssueRequired
-	approversHandler.ManuallyApproved = humanAddedApproved(ghc, log, pr.org, pr.repo, pr.number, botName, hasApprovedLabel)
+	approversHandler.ManuallyApproved = humanAddedApproved(ghc, log, pr.org, pr.repo, pr.number, botName, pr.hasApprovedLabel)
 
 	// Author implicitly approves their own PR if config allows it
 	if opts.ImplicitSelfApprove {
@@ -405,11 +410,23 @@ func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, o
 		approversHandler.AddAssignees(user.Login)
 	}
 
-	notifications := filterComments(commentsFromIssueComments, notificationMatcher(botName))
-	latestNotification := getLast(notifications)
+	pr.notifications := filterComments(commentsFromIssueComments, notificationMatcher(botName))
+
+	return &approversHandler, nil
+}
+
+// handle uses findApprovers to calculate an approver set.  Then
+// handle updates the bot notifications and approved label accordingly.
+func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, opts *plugins.Approve, pr *state) error {
+	approversHandler, err := findApprovers(log, ghc, repo, opts, pr)
+	if err != nil {
+		return err
+	}
+
+	latestNotification := getLast(pr.notifications)
 	newMessage := updateNotification(pr.org, pr.repo, pr.branch, latestNotification, approversHandler)
 	if newMessage != nil {
-		for _, notif := range notifications {
+		for _, notif := range pr.notifications {
 			if err := ghc.DeleteComment(pr.org, pr.repo, notif.ID); err != nil {
 				log.WithError(err).Errorf("Failed to delete comment from %s/%s#%d, ID: %d.", pr.org, pr.repo, pr.number, notif.ID)
 			}
@@ -420,12 +437,12 @@ func handle(log *logrus.Entry, ghc githubClient, repo approvers.RepoInterface, o
 	}
 
 	if !approversHandler.IsApproved() {
-		if hasApprovedLabel {
+		if pr.hasApprovedLabel {
 			if err := ghc.RemoveLabel(pr.org, pr.repo, pr.number, ApprovedLabel); err != nil {
 				log.WithError(err).Errorf("Failed to remove %q label from %s/%s#%d.", ApprovedLabel, pr.org, pr.repo, pr.number)
 			}
 		}
-	} else if !hasApprovedLabel {
+	} else if !pr.hasApprovedLabel {
 		if err := ghc.AddLabel(pr.org, pr.repo, pr.number, ApprovedLabel); err != nil {
 			log.WithError(err).Errorf("Failed to add %q label to %s/%s#%d.", ApprovedLabel, pr.org, pr.repo, pr.number)
 		}
