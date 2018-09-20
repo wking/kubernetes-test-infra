@@ -36,6 +36,7 @@ import (
 	"k8s.io/test-infra/prow/kube"
 	"k8s.io/test-infra/prow/logrusutil"
 	"k8s.io/test-infra/prow/metrics"
+	"k8s.io/test-infra/prow/plugins"
 	"k8s.io/test-infra/prow/tide"
 )
 
@@ -49,6 +50,7 @@ type options struct {
 	configPath    string
 	jobConfigPath string
 	cluster       string
+	pluginConfig  string
 
 	githubEndpoint  flagutil.Strings
 	githubTokenFile string
@@ -67,6 +69,7 @@ func gatherOptions() options {
 	flag.StringVar(&o.configPath, "config-path", "/etc/config/config.yaml", "Path to config.yaml.")
 	flag.StringVar(&o.jobConfigPath, "job-config-path", "", "Path to prow job configs.")
 	flag.StringVar(&o.cluster, "cluster", "", "Path to kube.Cluster YAML file. If empty, uses the local cluster.")
+	flag.StringVar(&o.pluginConfig, "plugin-config", plugins.ConfigPath, "Path to plugin config file.")
 
 	flag.Var(&o.githubEndpoint, "github-endpoint", "GitHub's API endpoint.")
 	flag.StringVar(&o.githubTokenFile, "github-token-file", "/etc/github/oauth", "Path to the file containing the GitHub OAuth token.")
@@ -124,6 +127,7 @@ func main() {
 			}
 		}
 	}
+
 	// The sync loop should be allowed more tokens than the status loop because
 	// it has to list all PRs in the pool every loop while the status loop only
 	// has to list changed PRs every loop.
@@ -144,6 +148,25 @@ func main() {
 		logrus.WithError(err).Fatal("Error getting bot name.")
 	}
 	gc.SetCredentials(botName, secretAgent.GetTokenGenerator(o.githubTokenFile))
+
+	pluginAgent := &plugins.PluginAgent{}
+
+	ownersClient := repoowners.NewClient(
+		gc, githubClient,
+		configAgent, pluginAgent.MDYAMLEnabled,
+		pluginAgent.SkipCollaborators,
+	)
+
+	pluginAgent.PluginClient = plugins.PluginClient{
+		GitHubClient: githubClient,
+		KubeClient:   kubeClient,
+		GitClient:    gitClient,
+		OwnersClient: ownersClient,
+		Logger:       logrus.WithField("agent", "plugin"),
+	}
+	if err := pluginAgent.Start(o.pluginConfig); err != nil {
+		logrus.WithError(err).Fatal("Error starting plugins.")
+	}
 
 	c := tide.NewController(ghcSync, ghcStatus, kc, configAgent, gc, nil)
 	defer c.Shutdown()

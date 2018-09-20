@@ -40,6 +40,7 @@ import (
 	"k8s.io/test-infra/prow/kube"
 	"k8s.io/test-infra/prow/pjutil"
 	"k8s.io/test-infra/prow/tide/blockers"
+	"k8s.io/test-infra/prow/tide/plugins"
 )
 
 type kubeClient interface {
@@ -751,11 +752,17 @@ func (c *Controller) mergePRs(sp subpool, prs []PullRequest) error {
 				}
 			}
 		}
+		details := github.MergeDetails{
+			SHA:         string(pr.HeadRefOID),
+			MergeMethod: string(mergeMethod),
+		}
+		tags, err := plugins.MergeTags()
+
+		if c.ca.Config().Tide.MergeGitHubApproveTag != "" {
+			details.CommitMessage = approverTags(&pr, c.ca.Config().Tide.MergeGitHubApproveTag)
+		}
 		for retry := 0; retry < maxRetries; retry++ {
-			if err := c.ghc.Merge(sp.org, sp.repo, int(pr.Number), github.MergeDetails{
-				SHA:         string(pr.HeadRefOID),
-				MergeMethod: string(mergeMethod),
-			}); err != nil {
+			if err := c.ghc.Merge(sp.org, sp.repo, int(pr.Number), details); err != nil {
 				if _, ok := err.(github.ModifiedHeadError); ok {
 					// This is a possible source of incorrect behavior. If someone
 					// modifies their PR as we try to merge it in a batch then we

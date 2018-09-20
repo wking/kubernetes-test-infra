@@ -95,6 +95,7 @@ func init() {
 	plugins.RegisterGenericCommentHandler(PluginName, handleGenericCommentEvent, helpProvider)
 	plugins.RegisterReviewEventHandler(PluginName, handleReviewEvent, helpProvider)
 	plugins.RegisterPullRequestHandler(PluginName, handlePullRequestEvent, helpProvider)
+	plugins.RegisterMergeHandler(PluginName, handleMergeEvent)
 }
 
 func helpProvider(config *plugins.Configuration, enabledRepos []string) (*pluginhelp.PluginHelp, error) {
