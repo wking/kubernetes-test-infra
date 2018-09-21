@@ -49,6 +49,7 @@ var (
 	genericCommentHandlers     = map[string]GenericCommentHandler{}
 	issueHandlers              = map[string]IssueHandler{}
 	issueCommentHandlers       = map[string]IssueCommentHandler{}
+	mergeHandlers              = map[string]MergeHandler{}
 	pullRequestHandlers        = map[string]PullRequestHandler{}
 	pushEventHandlers          = map[string]PushEventHandler{}
 	reviewEventHandlers        = map[string]ReviewEventHandler{}
@@ -74,6 +75,12 @@ type IssueCommentHandler func(PluginClient, github.IssueCommentEvent) error
 func RegisterIssueCommentHandler(name string, fn IssueCommentHandler, help HelpProvider) {
 	pluginHelp[name] = help
 	issueCommentHandlers[name] = fn
+}
+
+type MergeHandler func(PluginClient, repo github.Repo, pullRequest github.PullRequest) (tags []string, err error)
+
+func RegisterMergeHandler(name string, fn MergeHandler) {
+	mergeHandlers[name] = fn
 }
 
 type PullRequestHandler func(PluginClient, github.PullRequestEvent) error
@@ -955,6 +962,20 @@ func (pa *PluginAgent) IssueCommentHandlers(owner, repo string) map[string]Issue
 		}
 	}
 
+	return hs
+}
+
+// MergeHandlers returns a map of plugin names to handlers for the repo.
+func (pa *PluginAgent) MergeHandlers(owner, repo string) map[string]MergeHandler {
+	pa.mut.Lock()
+	defer pa.mut.Unlock()
+
+	hs := map[string]MergeHandler{}
+	for _, p := range pa.getPlugins(owner, repo) {
+		if h, ok := mergeHandlers[p]; ok {
+			hs[p] = h
+		}
+	}
 	return hs
 }
 

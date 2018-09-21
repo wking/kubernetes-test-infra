@@ -33,6 +33,7 @@ import (
 	prowflagutil "k8s.io/test-infra/prow/flagutil"
 	"k8s.io/test-infra/prow/logrusutil"
 	"k8s.io/test-infra/prow/metrics"
+	"k8s.io/test-infra/prow/plugins"
 	"k8s.io/test-infra/prow/tide"
 )
 
@@ -45,12 +46,13 @@ type options struct {
 	dryRun     bool
 	runOnce    bool
 	config     prowflagutil.ConfigOptions
+	plugins    prowflagutil.PluginOptions
 	kubernetes prowflagutil.KubernetesOptions
 	github     prowflagutil.GitHubOptions
 }
 
 func (o *options) Validate() error {
-	for _, group := range []flagutil.OptionGroup{&o.config, &o.kubernetes, &o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.config, &o.plugins, &o.kubernetes, &o.github} {
 		if err := group.Validate(o.dryRun); err != nil {
 			return err
 		}
@@ -64,7 +66,7 @@ func gatherOptions() options {
 	fs.IntVar(&o.port, "port", 8888, "Port to listen on.")
 	fs.BoolVar(&o.dryRun, "dry-run", true, "Whether to mutate any real-world state.")
 	fs.BoolVar(&o.runOnce, "run-once", false, "If true, run only once then quit.")
-	for _, group := range []flagutil.OptionGroup{&o.config, &o.kubernetes, &o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.config, &o.plugins, &o.kubernetes, &o.github} {
 		group.AddFlags(fs)
 	}
 	fs.IntVar(&o.syncThrottle, "sync-hourly-tokens", 800, "The maximum number of tokens per hour to be used by the sync controller.")
@@ -124,7 +126,17 @@ func main() {
 		logrus.WithError(err).Fatal("Error getting Kubernetes client.")
 	}
 
-	c := tide.NewController(githubSync, githubStatus, kubeClient, configAgent, gitClient, nil)
+	pluginAgent, err := &plugins.PluginAgent(configAgent, &plugins.PluginClient{
+		GitHubClient: githubSync,
+		KubeClient:   kubeClient,
+		GitClient:    gitClient,
+		Logger:       logrus.WithField("agent", "plugin"),
+	}, !o.runOnce)
+	if err != nil {
+		logrus.WithError(err).Fatal("Error starting plugins.")
+	}
+
+	c := tide.NewController(configAgent, pluginAgent, githubSync, githubStatus, kubeClient, configAgent, gitClient, nil) // FIXME
 	defer c.Shutdown()
 	server := &http.Server{Addr: ":" + strconv.Itoa(o.port), Handler: c}
 
