@@ -37,18 +37,16 @@ import (
 	"k8s.io/test-infra/prow/metrics"
 	pluginhelp "k8s.io/test-infra/prow/pluginhelp/hook"
 	"k8s.io/test-infra/prow/plugins"
-	"k8s.io/test-infra/prow/repoowners"
 	"k8s.io/test-infra/prow/slack"
 )
 
 type options struct {
 	port int
 
-	pluginConfig string
-
 	dryRun      bool
 	gracePeriod time.Duration
 	config      prowflagutil.ConfigOptions
+	plugins     prowflagutil.PluginOptions
 	kubernetes  prowflagutil.KubernetesOptions
 	github      prowflagutil.GitHubOptions
 
@@ -57,7 +55,7 @@ type options struct {
 }
 
 func (o *options) Validate() error {
-	for _, group := range []flagutil.OptionGroup{&o.config, &o.kubernetes, &o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.config, &o.plugins, &o.kubernetes, &o.github} {
 		if err := group.Validate(o.dryRun); err != nil {
 			return err
 		}
@@ -70,10 +68,9 @@ func gatherOptions() options {
 	o := options{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	fs.IntVar(&o.port, "port", 8888, "Port to listen on.")
-	fs.StringVar(&o.pluginConfig, "plugin-config", "/etc/plugins/plugins.yaml", "Path to plugin config file.")
 	fs.BoolVar(&o.dryRun, "dry-run", true, "Dry run for testing. Uses API tokens but does not mutate.")
 	fs.DurationVar(&o.gracePeriod, "grace-period", 180*time.Second, "On shutdown, try to handle remaining events for the specified duration. ")
-	for _, group := range []flagutil.OptionGroup{&o.config, &o.kubernetes, &o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.config, &o.plugins, &o.kubernetes, &o.github} {
 		group.AddFlags(fs)
 	}
 
@@ -136,23 +133,14 @@ func main() {
 		slackClient = slack.NewFakeClient()
 	}
 
-	pluginAgent := &plugins.PluginAgent{}
-
-	ownersClient := repoowners.NewClient(
-		gitClient, githubClient,
-		configAgent, pluginAgent.MDYAMLEnabled,
-		pluginAgent.SkipCollaborators,
-	)
-
-	pluginAgent.PluginClient = plugins.PluginClient{
+	pluginAgent, err := o.plugins.Agent(configAgent, &plugins.PluginClient{
 		GitHubClient: githubClient,
 		KubeClient:   kubeClient,
 		GitClient:    gitClient,
 		SlackClient:  slackClient,
-		OwnersClient: ownersClient,
 		Logger:       logrus.WithField("agent", "plugin"),
-	}
-	if err := pluginAgent.Start(o.pluginConfig); err != nil {
+	}, true)
+	if err != nil {
 		logrus.WithError(err).Fatal("Error starting plugins.")
 	}
 

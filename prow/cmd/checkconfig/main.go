@@ -18,7 +18,6 @@ limitations under the License.
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,9 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/test-infra/prow/apis/prowjobs/v1"
+
+	"k8s.io/test-infra/flagutil"
 	"k8s.io/test-infra/prow/errorutil"
 	needsrebase "k8s.io/test-infra/prow/external-plugins/needs-rebase/plugin"
-	"k8s.io/test-infra/prow/flagutil"
+	prowflagutil "k8s.io/test-infra/prow/flagutil"
 	"k8s.io/test-infra/prow/plugins/approve"
 	"k8s.io/test-infra/prow/plugins/blockade"
 	"k8s.io/test-infra/prow/plugins/blunderbuss"
@@ -50,10 +51,10 @@ import (
 )
 
 type options struct {
-	config       flagutil.ConfigOptions
-	pluginConfig string
+	config  prowflagutil.ConfigOptions
+	plugins prowflagutil.PluginOptions
 
-	warnings flagutil.Strings
+	warnings prowflagutil.Strings
 	strict   bool
 }
 
@@ -92,13 +93,12 @@ var allWarnings = []string{
 }
 
 func (o *options) Validate() error {
-	if err := o.config.Validate(false); err != nil {
-		return err
+	for _, group := range []flagutil.OptionGroup{&o.config, &o.plugins} {
+		if err := group.Validate(false); err != nil {
+			return err
+		}
 	}
 
-	if o.pluginConfig == "" {
-		return errors.New("required flag --plugin-config was unset")
-	}
 	for _, warning := range o.warnings.Strings() {
 		found := false
 		for _, registeredWarning := range allWarnings {
@@ -117,10 +117,10 @@ func (o *options) Validate() error {
 func gatherOptions() options {
 	o := options{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	fs.StringVar(&o.pluginConfig, "plugin-config", "", "Path to plugin config file.")
 	fs.Var(&o.warnings, "warnings", "Comma-delimited list of warnings to validate.")
 	fs.BoolVar(&o.strict, "strict", false, "If set, consider all warnings as errors.")
 	o.config.AddFlags(fs)
+	o.plugins.AddFlags(fs)
 	fs.Parse(os.Args[1:])
 	return o
 }
@@ -133,7 +133,7 @@ func main() {
 
 	// use all warnings by default
 	if len(o.warnings.Strings()) == 0 {
-		o.warnings = flagutil.NewStrings(allWarnings...)
+		o.warnings = prowflagutil.NewStrings(allWarnings...)
 	}
 
 	logrus.SetFormatter(
@@ -146,9 +146,9 @@ func main() {
 	}
 	cfg := configAgent.Config()
 
-	pluginAgent := plugins.PluginAgent{}
-	if err := pluginAgent.Load(o.pluginConfig); err != nil {
-		logrus.WithError(err).Fatal("Error loading Prow plugin config.")
+	pluginAgent, err := o.plugins.Agent(nil, nil, false)
+	if err != nil {
+		logrus.WithError(err).Fatal("Error initializing plugins.")
 	}
 	pcfg := pluginAgent.Config()
 

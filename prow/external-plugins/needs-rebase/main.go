@@ -42,11 +42,10 @@ import (
 )
 
 type options struct {
-	port int
-
-	pluginConfig string
-	dryRun       bool
-	github       prowflagutil.GitHubOptions
+	port    int
+	dryRun  bool
+	plugins prowflagutil.PluginOptions
+	github  prowflagutil.GitHubOptions
 
 	updatePeriod time.Duration
 
@@ -54,7 +53,7 @@ type options struct {
 }
 
 func (o *options) Validate() error {
-	for _, group := range []flagutil.OptionGroup{&o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.plugins, &o.github} {
 		if err := group.Validate(o.dryRun); err != nil {
 			return err
 		}
@@ -67,12 +66,11 @@ func gatherOptions() options {
 	o := options{}
 	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	fs.IntVar(&o.port, "port", 8888, "Port to listen on.")
-	fs.StringVar(&o.pluginConfig, "plugin-config", "/etc/plugins/plugins.yaml", "Path to plugin config file.")
 	fs.BoolVar(&o.dryRun, "dry-run", true, "Dry run for testing. Uses API tokens but does not mutate.")
 	fs.DurationVar(&o.updatePeriod, "update-period", time.Hour*24, "Period duration for periodic scans of all PRs.")
 	fs.StringVar(&o.webhookSecretFile, "hmac-secret-file", "/etc/webhook/hmac", "Path to the file containing the GitHub HMAC secret.")
 
-	for _, group := range []flagutil.OptionGroup{&o.github} {
+	for _, group := range []flagutil.OptionGroup{&o.plugins, &o.github} {
 		group.AddFlags(fs)
 	}
 	fs.Parse(os.Args[1:])
@@ -100,9 +98,9 @@ func main() {
 		logrus.WithError(err).Fatal("Error starting secrets agent.")
 	}
 
-	pa := &plugins.PluginAgent{}
-	if err := pa.Start(o.pluginConfig); err != nil {
-		log.WithError(err).Fatalf("Error loading plugin config from %q.", o.pluginConfig)
+	pluginAgent, err := o.plugin.Agent(nil, nil, true)
+	if err != nil {
+		log.WithError(err).Fatal("Error starting plugins.")
 	}
 
 	githubClient, err := o.github.GitHubClient(secretAgent, o.dryRun)
@@ -117,7 +115,7 @@ func main() {
 		log:            log,
 	}
 
-	go periodicUpdate(log, pa, githubClient, o.updatePeriod)
+	go periodicUpdate(log, pluginAgent, githubClient, o.updatePeriod)
 
 	http.Handle("/", server)
 	externalplugins.ServeExternalPluginHelp(http.DefaultServeMux, log, plugin.HelpProvider)

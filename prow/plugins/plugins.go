@@ -904,9 +904,6 @@ func (pa *PluginAgent) Set(pc *Configuration) {
 // Start starts polling path for plugin config. If the first attempt fails,
 // then start returns the error. Future errors will halt updates but not stop.
 func (pa *PluginAgent) Start(path string) error {
-	if err := pa.Load(path); err != nil {
-		return err
-	}
 	ticker := time.Tick(1 * time.Minute)
 	go func() {
 		for range ticker {
