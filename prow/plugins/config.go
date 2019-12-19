@@ -1421,10 +1421,10 @@ func (o BugzillaBranchOptions) matches(other BugzillaBranchOptions) bool {
 
 const BugzillaOptionsWildcard = `*`
 
-// OptionsForItem resolves a set of options for an item, honoring
+// optionsForItem resolves a set of options for an item, honoring
 // the `*` wildcard and doing defaulting if it is present with the
 // item itself.
-func OptionsForItem(item string, config map[string]BugzillaBranchOptions) BugzillaBranchOptions {
+func optionsForItem(item string, config map[string]BugzillaBranchOptions) BugzillaBranchOptions {
 	return ResolveBugzillaOptions(config[BugzillaOptionsWildcard], config[item])
 }
 
@@ -1577,18 +1577,18 @@ func ResolveBugzillaOptions(parent, child BugzillaBranchOptions) BugzillaBranchO
 // ones), always searching for the wildcard as well as the branch name: global, then org,
 // repo, and finally branch-specific configuration.
 func (b *Bugzilla) OptionsForBranch(org, repo, branch string) BugzillaBranchOptions {
-	options := OptionsForItem(branch, b.Default)
+	options := optionsForItem(branch, b.Default)
 	orgOptions, exists := b.Orgs[org]
 	if !exists {
 		return options
 	}
-	options = ResolveBugzillaOptions(options, OptionsForItem(branch, orgOptions.Default))
+	options = ResolveBugzillaOptions(options, optionsForItem(branch, orgOptions.Default))
 
 	repoOptions, exists := orgOptions.Repos[repo]
 	if !exists {
 		return options
 	}
-	options = ResolveBugzillaOptions(options, OptionsForItem(branch, repoOptions.Branches))
+	options = ResolveBugzillaOptions(options, optionsForItem(branch, repoOptions.Branches))
 	return options
 }
 
