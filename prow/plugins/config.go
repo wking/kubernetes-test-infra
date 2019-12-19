@@ -1312,7 +1312,7 @@ func (s *BugzillaBugState) Matches(bug *bugzilla.Bug) bool {
 // supersede `Status` fields. Implementations using these structures should
 // *only* use `Status` fields or only `States` fields, never both. The
 // implementation mirrors `Status` fields into the matching `State` fields in
-// the `ResolveBugzillaOptions` method to handle existing config, and is also
+// the `resolveBugzillaOptions` method to handle existing config, and is also
 // able to sufficiently resolve the presence of both types of fields.
 type BugzillaBranchOptions struct {
 	// ExcludeDefaults excludes defaults from more generic Bugzilla configurations.
@@ -1425,7 +1425,7 @@ const BugzillaOptionsWildcard = `*`
 // the `*` wildcard and doing defaulting if it is present with the
 // item itself.
 func optionsForItem(item string, config map[string]BugzillaBranchOptions) BugzillaBranchOptions {
-	return ResolveBugzillaOptions(config[BugzillaOptionsWildcard], config[item])
+	return resolveBugzillaOptions(config[BugzillaOptionsWildcard], config[item])
 }
 
 func mergeStatusesIntoStates(states *[]BugzillaBugState, statuses *[]string) *[]BugzillaBugState {
@@ -1454,10 +1454,10 @@ func mergeStatusesIntoStates(states *[]BugzillaBugState, statuses *[]string) *[]
 	return nil
 }
 
-// ResolveBugzillaOptions implements defaulting for a parent/child configuration,
+// resolveBugzillaOptions implements defaulting for a parent/child configuration,
 // preferring child fields where set. This method also reflects all "Status"
 // fields into matching `State` fields.
-func ResolveBugzillaOptions(parent, child BugzillaBranchOptions) BugzillaBranchOptions {
+func resolveBugzillaOptions(parent, child BugzillaBranchOptions) BugzillaBranchOptions {
 	output := BugzillaBranchOptions{}
 
 	if child.ExcludeDefaults == nil || !*child.ExcludeDefaults {
@@ -1582,13 +1582,13 @@ func (b *Bugzilla) OptionsForBranch(org, repo, branch string) BugzillaBranchOpti
 	if !exists {
 		return options
 	}
-	options = ResolveBugzillaOptions(options, optionsForItem(branch, orgOptions.Default))
+	options = resolveBugzillaOptions(options, optionsForItem(branch, orgOptions.Default))
 
 	repoOptions, exists := orgOptions.Repos[repo]
 	if !exists {
 		return options
 	}
-	options = ResolveBugzillaOptions(options, optionsForItem(branch, repoOptions.Branches))
+	options = resolveBugzillaOptions(options, optionsForItem(branch, repoOptions.Branches))
 	return options
 }
 
