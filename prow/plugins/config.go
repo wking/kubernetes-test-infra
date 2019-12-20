@@ -1421,13 +1421,6 @@ func (o BugzillaBranchOptions) matches(other BugzillaBranchOptions) bool {
 
 const BugzillaOptionsWildcard = `*`
 
-// optionsForItem resolves a set of options for an item, honoring
-// the `*` wildcard and doing defaulting if it is present with the
-// item itself.
-func optionsForItem(item string, config map[string]BugzillaBranchOptions) BugzillaBranchOptions {
-	return resolveBugzillaOptions(config[BugzillaOptionsWildcard], config[item])
-}
-
 func mergeStatusesIntoStates(states *[]BugzillaBugState, statuses *[]string) *[]BugzillaBugState {
 	var newStates []BugzillaBugState
 	stateSet := BugzillaBugStateSet{}
@@ -1571,19 +1564,39 @@ func resolveBugzillaOptions(parent, child BugzillaBranchOptions) BugzillaBranchO
 // ones), always searching for the wildcard as well as the branch name: global, then org,
 // repo, and finally branch-specific configuration.
 func (b *Bugzilla) OptionsForBranch(org, repo, branch string) BugzillaBranchOptions {
-	options := optionsForItem(branch, b.Default)
-	orgOptions, exists := b.Orgs[org]
-	if !exists {
-		return options
+	options := []BugzillaBranchOptions{
+		b.Default[BugzillaOptionsWildcard],
 	}
-	options = resolveBugzillaOptions(options, optionsForItem(branch, orgOptions.Default))
 
-	repoOptions, exists := orgOptions.Repos[repo]
-	if !exists {
-		return options
+	if defaultBranchOptions, ok := b.Default[branch]; ok {
+		options = append(options, defaultBranchOptions)
 	}
-	options = resolveBugzillaOptions(options, optionsForItem(branch, repoOptions.Branches))
-	return options
+
+	if orgOptions, ok := b.Orgs[org] {
+		if orgDefaultOptions, ok := orgOptions.Default[BugzillaOptionsWildcard]; ok {
+			options = append(options, orgDefaultOptions)
+		}
+
+		if orgBranchOptions, ok := orgOptions.Default[branch]; ok {
+			options = append(options, orgBranchOptions)
+		}
+
+		repoOptions, ok := orgOptions.Repos[repo]; ok {
+			repoDefaultOptions, ok := repoOptions[BugzillaOptionsWildcard]; ok {
+				options = append(options, repoDefaultOptions)
+			}
+
+			if repoBranchOptions, ok := repoOptions[branch]; ok {
+				options = append(options, repoBranchOptions)
+			}
+		}
+	}
+
+	resolved := options[0]
+	for _, child := range options[1:] {
+		options = resolveBugzillaOptions(resolved, child)
+	}
+	return resolved
 }
 
 // OptionsForRepo determines the criteria for a valid Bugzilla bug on branches of a repo
@@ -1591,38 +1604,7 @@ func (b *Bugzilla) OptionsForBranch(org, repo, branch string) BugzillaBranchOpti
 // ones), always searching for the wildcard as well as the branch name: global, then org,
 // repo, and finally branch-specific configuration.
 func (b *Bugzilla) OptionsForRepo(org, repo string) map[string]BugzillaBranchOptions {
-	options := map[string]BugzillaBranchOptions{}
-	for branch := range b.Default {
-		options[branch] = b.OptionsForBranch(org, repo, branch)
-	}
-
-	orgOptions, exists := b.Orgs[org]
-	if exists {
-		for branch := range orgOptions.Default {
-			options[branch] = b.OptionsForBranch(org, repo, branch)
-		}
-	}
-
-	repoOptions, exists := orgOptions.Repos[repo]
-	if exists {
-		for branch := range repoOptions.Branches {
-			options[branch] = b.OptionsForBranch(org, repo, branch)
-		}
-	}
-
-	// if there are nested defaults there is no reason to call out branches
-	// from higher levels of config
-	var toDelete []string
-	for branch, branchOptions := range options {
-		if branchOptions.matches(options[BugzillaOptionsWildcard]) && branch != BugzillaOptionsWildcard {
-			toDelete = append(toDelete, branch)
-		}
-	}
-	for _, branch := range toDelete {
-		delete(options, branch)
-	}
-
-	return options
+	return b.OptionsForBranch(org, repo, "invalid branch name which will never match")
 }
 
 // Override holds options for the override plugin
